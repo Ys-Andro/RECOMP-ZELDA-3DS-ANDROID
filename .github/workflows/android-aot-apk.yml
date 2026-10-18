@@ -1,0 +1,85 @@
+name: Android AOT APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      title_source_archive_url:
+        description: 'HTTPS URL of the verified translated title source archive containing TITLE_SOURCE_MANIFEST.json'
+        required: true
+        type: string
+      title_source_archive_sha256:
+        description: 'SHA-256 of the title source archive'
+        required: true
+        type: string
+      gradle_task:
+        description: 'Gradle task'
+        required: false
+        default: assembleRelease
+        type: string
+
+jobs:
+  build-arm64-apk:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build unzip python3
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK/NDK/CMake
+        run: |
+          sdkmanager --install \
+            'platform-tools' \
+            'platforms;android-35' \
+            'build-tools;35.0.0' \
+            'ndk;29.0.14206865' \
+            'cmake;3.30.5'
+          yes | sdkmanager --licenses >/dev/null || true
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/29.0.14206865" >> "$GITHUB_ENV"
+          echo "PATH=$ANDROID_SDK_ROOT/cmake/3.30.5/bin:$PATH" >> "$GITHUB_ENV"
+
+      - name: Download verified translated title sources
+        env:
+          TITLE_URL: ${{ inputs.title_source_archive_url }}
+          TITLE_SHA256: ${{ inputs.title_source_archive_sha256 }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/aot"
+          curl --fail --location --retry 3 --output "$RUNNER_TEMP/aot/title-source.zip" "$TITLE_URL"
+          echo "$TITLE_SHA256  $RUNNER_TEMP/aot/title-source.zip" | sha256sum --check --status
+          echo "TRIAEVUM_TITLE_SOURCE_ARCHIVE=$RUNNER_TEMP/aot/title-source.zip" >> "$GITHUB_ENV"
+
+      - name: Build native ARM64 and APK
+        env:
+          TRIAEVUM_TITLE_SOURCE_ARCHIVE: ${{ env.TRIAEVUM_TITLE_SOURCE_ARCHIVE }}
+        run: |
+          chmod +x ports/android/gradlew ports/android/tools/*.sh
+          ports/android/tools/build_android_apk.sh TRIAEVUM_ANDROID_GRADLE_TASK="${{ inputs.gradle_task }}"
+
+      - name: Verify APK and native ELF alignment
+        run: |
+          APK="$(find ports/android/app/build/outputs/apk/release -maxdepth 1 -name '*.apk' -print -quit)"
+          test -n "$APK"
+          "$ANDROID_SDK_ROOT/build-tools/35.0.0/zipalign" -c -P 16 -v 4 "$APK"
+          mkdir -p out
+          cp "$APK" out/
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: triaevum-android-arm64-release
+          path: out/*.apk
+          if-no-files-found: error
