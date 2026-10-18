@@ -65,15 +65,24 @@ jobs:
       - name: Build native ARM64 and APK
         env:
           TRIAEVUM_TITLE_SOURCE_ARCHIVE: ${{ env.TRIAEVUM_TITLE_SOURCE_ARCHIVE }}
+          TRIAEVUM_ANDROID_GRADLE_TASK: ${{ inputs.gradle_task }}
         run: |
           chmod +x ports/android/gradlew ports/android/tools/*.sh
-          ports/android/tools/build_android_apk.sh TRIAEVUM_ANDROID_GRADLE_TASK="${{ inputs.gradle_task }}"
+          ports/android/tools/build_android_apk.sh
 
       - name: Verify APK and native ELF alignment
         run: |
           APK="$(find ports/android/app/build/outputs/apk/release -maxdepth 1 -name '*.apk' -print -quit)"
           test -n "$APK"
           "$ANDROID_SDK_ROOT/build-tools/35.0.0/zipalign" -c -P 16 -v 4 "$APK"
+          unzip -q "$APK" 'lib/arm64-v8a/*.so' -d "$RUNNER_TEMP/apk-libs"
+          READ_ELF="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+          for so in "$RUNNER_TEMP"/apk-libs/lib/arm64-v8a/*.so; do
+            "$READ_ELF" -l "$so" | grep -Eq '0x4000|0x00004000' || {
+              echo "ELF no alineado a 16 KiB: $so" >&2
+              exit 1
+            }
+          done
           mkdir -p out
           cp "$APK" out/
 
