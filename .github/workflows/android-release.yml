@@ -2,274 +2,197 @@ name: Android Build & Release
 
 on:
   push:
-    tags:
-      - 'v*'
-    branches:
-      - main
+    branches: [main]
+    tags: ['v*']
     paths:
       - 'ports/android/**'
       - 'tools/android/**'
+      - 'tools/triaevum_release/**'
+      - 'runtime/**'
+      - 'CMakeLists.txt'
+      - 'CMake/**'
       - 'scripts/**'
-      - 'source.zip'
       - '.github/workflows/android-release.yml'
   pull_request:
     paths:
       - 'ports/android/**'
       - 'tools/android/**'
+      - 'tools/triaevum_release/**'
+      - 'runtime/**'
+      - 'CMakeLists.txt'
+      - 'CMake/**'
       - 'scripts/**'
-      - 'source.zip'
       - '.github/workflows/android-release.yml'
   workflow_dispatch:
     inputs:
       publish_release:
-        description: 'Publish GitHub Release'
+        description: 'Publicar una release de GitHub'
         required: true
         type: boolean
-        default: true
+        default: false
       release_tag:
-        description: 'Release Tag (e.g. v0.6.0-android-alpha.1)'
+        description: 'Etiqueta de release (ej. v0.6.0-android-alpha.1)'
         required: false
         type: string
         default: ''
       prerelease:
-        description: 'Mark as pre-release'
+        description: 'Marcar como pre-release'
         required: true
         type: boolean
-        default: false
+        default: true
       rom_url:
-        description: 'Direct download URL for OoT3D ROM (.3ds / .cci) (Optional)'
+        description: 'URL directa de una ROM OoT3D propia (opcional; no se publica)'
         required: false
         type: string
         default: ''
       source_zip_url:
-        description: 'Direct download URL for pre-generated source.zip / shards (Optional)'
+        description: 'URL de source.zip AOT previamente generado (opcional)'
         required: false
         type: string
         default: ''
-      fail_if_title_missing:
-        description: 'Fail build if real AOT title cannot be built (prevents broken stub releases)'
-        required: false
-        type: boolean
-        default: true
 
 permissions:
   contents: write
 
 jobs:
-  build-and-release:
+  build-android:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
-
+    timeout-minutes: 90
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Set up JDK 17
+      - name: JDK 17
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
+          distribution: temurin
           java-version: '17'
 
-      - name: Set up Python 3.12
+      - name: Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      - name: Install build tools and dependencies
+      - name: Install host tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build cmake libvulkan-dev
+          sudo apt-get install -y ninja-build cmake unzip libvulkan-dev
 
-      - name: Locate Android SDK and NDK
+      - name: Configure Android NDK r29
         run: |
-          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
-          NDK_DIR=$(find "$ANDROID_HOME/ndk" -maxdepth 1 -mindepth 1 | sort -V | tail -n 1)
-          if [ -z "$NDK_DIR" ] || [ ! -d "$NDK_DIR" ]; then
-            echo "Installing Android NDK 27.2.12479018..."
-            echo "y" | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;27.2.12479018"
-            NDK_DIR="$ANDROID_HOME/ndk/27.2.12479018"
-          fi
-          echo "Found Android NDK at: $NDK_DIR"
-          echo "ANDROID_NDK_ROOT=$NDK_DIR" >> $GITHUB_ENV
-          echo "NDK=$NDK_DIR" >> $GITHUB_ENV
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          echo "y" | "$SDKMANAGER" --install "ndk;29.0.14206865" "platforms;android-35" "build-tools;35.0.0"
+          NDK_DIR="$ANDROID_HOME/ndk/29.0.14206865"
+          test -d "$NDK_DIR"
+          echo "ANDROID_NDK_ROOT=$NDK_DIR" >> "$GITHUB_ENV"
+          echo "NDK=$NDK_DIR" >> "$GITHUB_ENV"
 
-      - name: Obtain or Generate Title Sources (AOT)
+      - name: Prepare title source
         env:
           ROM_URL: ${{ github.event.inputs.rom_url || secrets.OOT3D_ROM_URL }}
           SOURCE_ZIP_URL: ${{ github.event.inputs.source_zip_url || secrets.SOURCE_ZIP_URL }}
         run: |
-          mkdir -p title-source
-          mkdir -p work-ir
-
-          # 1. Check if source.zip is present or downloadable
-          if [ -f "source.zip" ]; then
-            echo "Found source.zip in repository root. Extracting..."
-            unzip -q source.zip -d ./title-source/
+          mkdir -p title-source work-ir
+          if [ -f source.zip ]; then
+            unzip -q source.zip -d title-source
           elif [ -n "$SOURCE_ZIP_URL" ]; then
-            echo "Downloading pre-generated source.zip from URL..."
-            curl -L "$SOURCE_ZIP_URL" -o source.zip
-            unzip -q source.zip -d ./title-source/
+            curl --fail --location --retry 3 "$SOURCE_ZIP_URL" -o source.zip
+            unzip -q source.zip -d title-source
           fi
-
-          # Normalize internal directory nesting if zipped with a parent folder
-          if [ -d "./title-source/source" ]; then
-            mv ./title-source/source/* ./title-source/
-          elif [ -d "./title-source/translated-sources" ]; then
-            mv ./title-source/translated-sources/* ./title-source/
+          if [ -d title-source/source ]; then
+            cp -a title-source/source/. title-source/
+          elif [ -d title-source/translated-sources ]; then
+            cp -a title-source/translated-sources/. title-source/
           fi
-
-          # 2. If title-source is still empty, check if a ROM is available or provided
-          if [ ! -f "./title-source/TITLE_SOURCE_MANIFEST.json" ]; then
-            ROM_FILE=""
-            if [ -n "$ROM_URL" ]; then
-              echo "Downloading ROM from URL..."
-              curl -L "$ROM_URL" -o game_rom.3ds
-              ROM_FILE="game_rom.3ds"
-            else
-              FOUND_ROM=$(find . -maxdepth 2 -name "*.3ds" -o -name "*.cci" | head -n 1)
-              if [ -n "$FOUND_ROM" ] && [ -f "$FOUND_ROM" ]; then
-                echo "Found local ROM file: $FOUND_ROM"
-                ROM_FILE="$FOUND_ROM"
-              fi
-            fi
-
-            if [ -n "$ROM_FILE" ] && [ -f "$ROM_FILE" ]; then
-              echo "Extracting and generating AOT C++ shards from ROM ($ROM_FILE)..."
-              python3 tools/android/generate_title_from_rom.py \
-                --rom "$ROM_FILE" \
-                --work-dir work-ir \
-                --output title-source
-            fi
+          if [ ! -f title-source/TITLE_SOURCE_MANIFEST.json ] && [ -n "$ROM_URL" ]; then
+            curl --fail --location --retry 3 "$ROM_URL" -o game_rom.3ds
+            python3 tools/android/generate_title_from_rom.py \
+              --rom game_rom.3ds \
+              --work-dir work-ir \
+              --output title-source
           fi
+          test -f title-source/TITLE_SOURCE_MANIFEST.json || {
+            echo 'ERROR: no verified title source was supplied.'
+            echo 'Provide a private OOT3D_ROM_URL/SOURCE_ZIP_URL secret or workflow input.'
+            exit 1
+          }
+          test "$(find title-source -maxdepth 1 -name '*.cpp' | wc -l)" -gt 0
 
-          if [ -f "./title-source/TITLE_SOURCE_MANIFEST.json" ]; then
-            echo "✅ Title sources ready with $(ls -1 title-source/*.cpp | wc -l) C++ files."
-          else
-            echo "⚠️ Title sources are not present."
-          fi
-
-      - name: Build Android Native Runtime (ARM64)
+      - name: Build Android runtime
         run: |
-          mkdir -p build/runtime
           cmake -S ports/android/runtime -B build/runtime -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI=arm64-v8a \
             -DANDROID_PLATFORM=android-29 \
             -DANDROID_STL=c++_shared \
-            -DCMAKE_BUILD_TYPE=Release
-          ninja -C build/runtime oot3d_native_game
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_BUILD_PARALLEL_LEVEL=3
+          ninja -C build/runtime -j3 oot3d_native_game
 
-      - name: Compile Real Title Shared Library (AOT)
+      - name: Build verified whole-AOT title
         run: |
-          if [ -f "title-source/TITLE_SOURCE_MANIFEST.json" ]; then
-            echo "Compiling structural game code shards into true AOT binary..."
-            mkdir -p build/title
-            
-            cmake -S ports/android/native -B build/native_title -G Ninja \
-              -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake" \
-              -DANDROID_ABI=arm64-v8a \
-              -DANDROID_PLATFORM=android-29 \
-              -DANDROID_STL=c++_shared \
-              -DCMAKE_BUILD_TYPE=Release \
-              -DTRIAEVUM_ANDROID_BUILD_NRI=OFF \
-              -DTRIAEVUM_TRANSLATED_TITLE_DIR="$(pwd)/title-source" \
-              -DTRIAEVUM_ANDROID_TITLE_OPTIMIZATION=1 \
-              -DTRIAEVUM_ANDROID_TITLE_DEBUG_INFO=OFF
-            
-            ninja -C build/native_title -j 4 triaevum_android_title
-            
-            # Stage the created file
-            cp build/native_title/libtriaevum_title_aot.so build/title/libtriaevum_title_aot.so
-            
-            # Validate ABI-v2 export
-            LLVM_READELF="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
-            if ! "$LLVM_READELF" --dyn-syms build/title/libtriaevum_title_aot.so | grep "triaevum_title_whole_aot_query" > /dev/null; then
-              echo "FATAL: libtriaevum_title_aot.so does not export triaevum_title_whole_aot_query!"
-              exit 1
-            fi
-            echo "✅ Verified libtriaevum_title_aot.so exports ABI-v2 entry points."
-          else
-            echo "Skipping true AOT library build: title-source directory is missing or empty."
-          fi
+          cmake -S ports/android/native -B build/native_title -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-29 \
+            -DANDROID_STL=c++_shared \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DTRIAEVUM_ANDROID_BUILD_NRI=OFF \
+            -DTRIAEVUM_TRANSLATED_TITLE_DIR="$(pwd)/title-source" \
+            -DTRIAEVUM_ANDROID_TITLE_OPTIMIZATION=1 \
+            -DTRIAEVUM_ANDROID_TITLE_DEBUG_INFO=OFF
+          ninja -C build/native_title -j2 triaevum_android_title
+          mkdir -p build/title
+          cp build/native_title/libtriaevum_title_aot.so build/title/
+          LLVM_READELF="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+          "$LLVM_READELF" -l build/title/libtriaevum_title_aot.so | grep -q '0x4000'
+          "$LLVM_READELF" --dyn-syms build/title/libtriaevum_title_aot.so | grep -q triaevum_title_whole_aot_query
 
-      - name: Prepare and Stage Native Libraries
+      - name: Stage native libraries
         run: |
-          if [ ! -f "build/title/libtriaevum_title_aot.so" ]; then
-            echo "================================================================================="
-            echo "ERROR: libtriaevum_title_aot.so was NOT generated!"
-            echo "Cannot publish or produce a playable APK without the real game logic library,"
-            echo "as it will fail on device with: 'the private whole-AOT ABI-v2 plugin is missing'."
-            echo "Please provide OOT3D_ROM_URL secret, rom_url input, or source_zip_url."
-            echo "================================================================================="
-            exit 1
-          fi
-
-          echo "✅ Using genuinely compiled whole-AOT game module."
-          TITLE_MODULE="$(pwd)/build/title/libtriaevum_title_aot.so"
-
           python3 tools/android/stage_native_app.py \
             --runtime-build build/runtime \
-            --title-module "$TITLE_MODULE" \
+            --title-module "$(pwd)/build/title/libtriaevum_title_aot.so" \
             --ndk "$ANDROID_NDK_ROOT" \
             --output build/staged_native_libs
 
-      - name: Build Android Controls & APK
+      - name: Test Android controls
         run: |
           chmod +x ports/android/gradlew
-          ports/android/gradlew -p ports/android :controls:assembleDebug :controls:testDebugUnitTest --console=plain
+          ports/android/gradlew -p ports/android :controls:testDebugUnitTest --console=plain
+
+      - name: Build APK
+        run: |
           ports/android/gradlew -p ports/android :app:assembleDebug \
             -PtriaevumSdlSource="$(pwd)/build/runtime/_deps/sdl2-src" \
             -PtriaevumNativeStage="$(pwd)/build/staged_native_libs" \
             --console=plain
 
-      - name: Package Release APK
+      - name: Verify APK
         run: |
+          APK=ports/android/app/build/outputs/apk/debug/app-debug.apk
+          test -f "$APK"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$APK"
           mkdir -p dist
-          APK_SOURCE="ports/android/app/build/outputs/apk/debug/app-debug.apk"
-          if [ -f "$APK_SOURCE" ]; then
-            cp "$APK_SOURCE" "dist/TriAevum-Oot3D-Android-arm64-v8a.apk"
-            echo "Release APK packaged successfully:"
-            ls -lh dist/TriAevum-Oot3D-Android-arm64-v8a.apk
-          else
-            echo "Error: APK not found at $APK_SOURCE"
-            exit 1
-          fi
+          cp "$APK" dist/TriAevum-Oot3D-Android-arm64-v8a-debug.apk
 
-      - name: Upload APK Artifact
+      - name: Upload CI artifact
         uses: actions/upload-artifact@v4
         with:
           name: TriAevum-Oot3D-Android-arm64-v8a
-          path: dist/TriAevum-Oot3D-Android-arm64-v8a.apk
+          path: dist/TriAevum-Oot3D-Android-arm64-v8a-debug.apk
           if-no-files-found: error
 
-      - name: Determine Release Tag
-        id: release_info
-        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_release) || github.ref == 'refs/heads/main'
-        run: |
-          if [ -n "${{ github.event.inputs.release_tag }}" ]; then
-            TAG="${{ github.event.inputs.release_tag }}"
-          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            TAG="${GITHUB_REF#refs/tags/}"
-          else
-            TAG="v1.0.0-android"
-          fi
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
-
-      - name: Publish GitHub Release
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_release)
         uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_release) || github.ref == 'refs/heads/main'
         with:
-          tag_name: ${{ steps.release_info.outputs.tag }}
-          name: ${{ steps.release_info.outputs.tag }}
-          prerelease: ${{ github.event.inputs.prerelease || contains(steps.release_info.outputs.tag, 'alpha') || contains(steps.release_info.outputs.tag, 'beta') }}
-          files: dist/TriAevum-Oot3D-Android-arm64-v8a.apk
+          tag_name: ${{ github.event.inputs.release_tag || github.ref_name }}
+          name: ${{ github.event.inputs.release_tag || github.ref_name }}
+          prerelease: ${{ github.event.inputs.prerelease || true }}
+          files: dist/TriAevum-Oot3D-Android-arm64-v8a-debug.apk
           generate_release_notes: true
-          body: |
-            ### TriAevum Android Native Release (${{ steps.release_info.outputs.tag }})
-
-            - **Platform**: Android ARM64 (`arm64-v8a`)
-            - **Engine**: TriAevum native Vulkan / NRI renderer with 3DS PICA200 emulation
-            - **Status**: Full AOT game instruction module (`libtriaevum_title_aot.so`) compiled and embedded directly.
