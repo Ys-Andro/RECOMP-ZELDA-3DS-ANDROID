@@ -5,24 +5,28 @@ import android.app.Application;
 import android.os.Bundle;
 import android.view.View;
 
-/** Android application host for lifecycle-safe UI configuration. */
+/** Android application host for lifecycle-safe UI configuration and Spanish defaults. */
 public final class TriAevumApplication extends Application {
     @Override
     public void onCreate() {
         super.onCreate();
+
+        // Spanish is the first-run language. A later user selection is preserved.
+        android.content.SharedPreferences prefs = getSharedPreferences("host_preferences", MODE_PRIVATE);
+        if (!prefs.getBoolean("spanish_default_initialized", false)) {
+            try {
+                new TriAevumConfigManager(this).setLanguageCode("es");
+            } catch (Throwable ignored) {
+                // The configuration directory may not exist yet; the launcher will retry.
+            }
+            prefs.edit().putBoolean("spanish_default_initialized", true).apply();
+        }
+
         registerActivityLifecycleCallbacks(new ActivityLifecycleCallbacks() {
-            @Override public void onActivityCreated(Activity activity, Bundle state) {
-                apply(activity);
-            }
-            @Override public void onActivityResumed(Activity activity) {
-                apply(activity);
-            }
-            @Override public void onActivityPostCreated(Activity activity, Bundle state) {
-                apply(activity);
-            }
-            @Override public void onActivityPostResumed(Activity activity) {
-                apply(activity);
-            }
+            @Override public void onActivityCreated(Activity activity, Bundle state) { apply(activity); }
+            @Override public void onActivityResumed(Activity activity) { apply(activity); }
+            @Override public void onActivityPostCreated(Activity activity, Bundle state) { apply(activity); }
+            @Override public void onActivityPostResumed(Activity activity) { apply(activity); }
             @Override public void onActivityStarted(Activity activity) { }
             @Override public void onActivityPostStarted(Activity activity) { }
             @Override public void onActivityPaused(Activity activity) { }
