@@ -1,0 +1,52 @@
+name: Android Port Validation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ports/android/**'
+      - 'runtime/**'
+      - 'tools/**'
+      - '.github/workflows/android-port-validation.yml'
+  pull_request:
+    paths:
+      - 'ports/android/**'
+      - 'runtime/**'
+      - 'tools/**'
+      - '.github/workflows/android-port-validation.yml'
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate Android port structure
+        working-directory: ports/android
+        run: bash tools/validate_android_port_v2.sh
+
+      - name: Validate native Android CMake configuration
+        working-directory: ports/android
+        run: |
+          grep -q 'arm64-v8a' native/CMakeLists.txt
+          grep -q 'ANDROID_NATIVE_API_LEVEL LESS 29' native/CMakeLists.txt
+          grep -q -- '-Wl,-z,max-page-size=16384' native/CMakeLists.txt
+
+      - name: Validate Spanish localization layer
+        run: |
+          test -f ports/android/app/src/main/java/org/triaevum/android/SpanishUi.java
+          test -f ports/android/app/src/main/java/org/triaevum/android/TriAevumApplication.java
+          grep -q 'SpanishUi.apply' ports/android/app/src/main/java/org/triaevum/android/TriAevumApplication.java
+
+      - name: Validate Android packaging requirements
+        run: |
+          grep -q 'targetSdk = 35' ports/android/app/build.gradle.kts
+          grep -q 'abiFilters += "arm64-v8a"' ports/android/app/build.gradle.kts
+          grep -q 'useLegacyPackaging = false' ports/android/app/build.gradle.kts
+
+      - name: Report native-title build requirement
+        run: |
+          echo 'The complete APK build requires publisher-supplied translated OoT3D AOT sources.'
+          echo 'This CI job intentionally does not fabricate or embed proprietary game binaries.'
