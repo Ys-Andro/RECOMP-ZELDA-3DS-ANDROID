@@ -1,32 +1,37 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-feature android:name="android.hardware.vulkan.level" android:version="1" android:required="true" />
+    <uses-feature android:name="android.hardware.vulkan.version" android:version="0x00400003" android:required="true" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="32" tools:ignore="ScopedStorage" />
-    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" tools:ignore="ScopedStorage" />
-    <application android:label="TriAevum"
+
+    <application
+        android:name=".TriAevumApplication"
+        android:label="TriAevum"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
-        android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen"
-        android:usesCleartextTraffic="true"
+        android:theme="@style/TriAevumTheme"
         android:allowBackup="false"
-        android:requestLegacyExternalStorage="true">
-        <activity android:name=".TriAevumDownloadActivity" android:exported="true"
+        android:resizeableActivity="false"
+        android:supportsRtl="true">
+        <activity
+            android:name=".TriAevumDownloadActivity"
+            android:exported="true"
             android:screenOrientation="sensorLandscape"
-            android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode|navigation|density">
+            android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode|navigation|density"
+            android:windowSoftInputMode="adjustNothing">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-        <activity android:name=".TriAevumActivity" android:exported="true"
+        <activity
+            android:name=".TriAevumActivity"
+            android:exported="true"
             android:launchMode="singleTask"
             android:screenOrientation="sensorLandscape"
-            android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode|navigation|density">
-        </activity>
+            android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode|navigation|density"
+            android:windowSoftInputMode="adjustNothing" />
     </application>
 </manifest>
