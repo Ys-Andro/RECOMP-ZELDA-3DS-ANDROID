@@ -16,43 +16,56 @@ val defaultStage = File(projectDir.parentFile, "staged_native_libs")
 val nativeStage = providers.gradleProperty("triaevumNativeStage").orElse(
     providers.provider { if (defaultStage.isDirectory) defaultStage.absolutePath else null }
 )
+
 android {
     namespace = "org.triaevum.android"
     compileSdk = 35
+
     defaultConfig {
         applicationId = "org.triaevum.android"
         minSdk = 29
-        targetSdk = 33
-        versionCode = 1
-        versionName = "0.1-intro-dev"
+        targetSdk = 35
+        versionCode = 10
+        versionName = "0.6.0-android-alpha.1"
         ndk { abiFilters += "arm64-v8a" }
     }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
-    }
+    kotlinOptions { jvmTarget = "17" }
+
     sourceSets.getByName("main") {
         if (nativeStage.isPresent) jniLibs.srcDir(nativeStage.get())
     }
-    packaging { jniLibs.useLegacyPackaging = true }
+
+    packaging {
+        jniLibs.useLegacyPackaging = false
+        jniLibs.keepDebugSymbols.add("**/*.so")
+    }
+
     androidResources {
         noCompress += listOf("bin", "o3tu", "mp4", "mp3")
     }
 }
+
 tasks.register("checkNativeStage") {
     onlyIf {
-        gradle.startParameter.taskNames.any { it.contains("assemble", ignoreCase = true) || it.contains("package", ignoreCase = true) }
+        gradle.startParameter.taskNames.any {
+            it.contains("assemble", ignoreCase = true) || it.contains("package", ignoreCase = true)
+        }
     }
     doLast {
         check(nativeStage.isPresent) {
             "Supply -PtriaevumNativeStage from the Android native build."
         }
         for (name in listOf("TriAevum", "triaevum_title_bootstrap", "triaevum_title_aot", "c++_shared")) {
-            check(file("${nativeStage.get()}/arm64-v8a/lib$name.so").isFile) { "Missing native library: $name" }
+            check(file("${nativeStage.get()}/arm64-v8a/lib$name.so").isFile) {
+                "Missing native library: $name"
+            }
         }
     }
 }
+
 tasks.named("preBuild") { dependsOn("checkNativeStage") }
